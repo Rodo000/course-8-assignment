@@ -1,0 +1,75 @@
+---
+title: "Weight lifting assessment"
+output: html_document
+date: "2024-04-02"
+---
+
+For this assignment, we will attempt to construct a model to predict a barbell lift form. This form will have 5 lvels: A, B, C, D & E. First, the libraries we will use for this assignment are `caret`, `dplyr` and `ranger`. lets load those libraries and read our testing and training data as well. We will also set a seed for reproducibility. 
+```{r}
+library(caret)
+library(dplyr)
+library(ranger)
+
+training <- read.csv("pml-training.csv")
+testing <- read.csv("pml-testing.csv")
+
+set.seed(111)
+```
+
+Upon a closer inspection, a big portion of features in our 'testing' set consists of only NA's. This is a problem because we cannot train our model on features that are present in our training set but not on our testing set. We will address this issue by identifying all of the columns on our testing set that are made of only NA's and removing them from both our testing and training set. That way our model is trained on only the varibales that are present in both sets. 
+```{r}
+valid_cols <- colSums(!is.na(testing)) > 0
+training <- training[, valid_cols | names(training) == "classe"]
+testing <- testing[, valid_cols]
+```
+
+Given that our dataset is very big, we will want to address overfitting from the early stages of building the model. One way we can do this is by removing the near-zero variance predictors. This are the features that vary very little from observation to observation, thus are unlikely to contribute in a meaningful way to out model. Removing them will reduce model complexity and improve generalization in our model. We will use `nearZeroVar()` from the caret package to identify and then remove these features.
+```{r}
+nzv <- nearZeroVar(training, saveMetrics = TRUE)
+training <- training[, !nzv$nzv | names(training) == "classe"]
+```
+
+We will now preprocess our data. First, we will address the missing values in our dataset. In this case, we have chosen to substitute all NA's with the median value of each column so that we don't alter the distribution too much. Then, we will permorm feature scaling on our dataset. This way we ensure each feature contributes equally to our model and prevent our model from being biased by the scale of any feature. We will use the function `preProcess()` from the caret package to do the steps described above.  
+```{r}
+preProcValues <- preProcess(training[, names(training) != "classe"], method = c("medianImpute", "center", "scale"))
+training_processed <- predict(preProcValues, training[, names(training) != "classe"])
+training_processed$classe <- training$classe
+```
+
+For the next step, we will split our resulting dataset into a training and a cross-validation dataset, assigninig 75% and 25% of the data respectively.  
+```{r}
+set.seed(112)
+inTrain <- createDataPartition(y = training_processed$classe, p = 0.75, list = FALSE)
+training_set <- training_processed[inTrain, ]
+validation_set <- training_processed[-inTrain, ]
+```
+
+We will now prepare a control object for the 'train' function we will use ahead using `trainControl()`. Here, we will instruct 'train' to do a 5-fold cross-validation. We will also use `tuneGrid()` to specify a range of values for several tuning parameters, including Gini impurity as the split rule and 2 values for the minimun sizes of the nodes (10 & 20). This will make the training process more effective as it will choose the combination of configurations that performs the best. 
+```{r}
+control <- trainControl(method = "cv", number = 5)
+tuneGrid <- expand.grid(.mtry = sqrt(ncol(training_set) - 1), .splitrule = "gini", .min.node.size = c(10, 20))
+```
+
+Once our data has been processed and our model parameters have been tuned, we can now train the model.
+```{r}
+modelFit <- train(classe ~ ., data = training_set, method = "ranger", trControl = control, tuneGrid = tuneGrid)
+```
+
+With the model now trained, we will evaluate the model on our validation set first. 
+```{r}
+predictions <- predict(modelFit, validation_set)
+confMatrix <- confusionMatrix(predictions, as.factor(validation_set$classe))
+print(confMatrix)
+```
+
+Now, we will apply the same preprocessing to our testing set and make our predictions with our trained model. 
+```{r}
+testing_processed <- predict(preProcValues, testing)
+
+predictions_test <- predict(modelFit, newdata = testing_processed)
+print(predictions_test)
+```
+
+These are our model's final predictions. As we can see, the model is heavily biased towards A. This was, however, the best prediction I was able to obtain after training different models with a variety of parameters. Originally, attempting to predict with a model that doesn't do data preprocessing, feature scaling and grid tunning results in a prediction of all A's. Many of the different models I tried alsso resulted in the models predicting 20 A's. This model, although certainly not perfect, performs significaltly better than the rest and is the result of several hours of trial and error.
+
+Thank you for reading and I hope you have a great day. 
